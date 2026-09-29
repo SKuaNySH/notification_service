@@ -1,109 +1,127 @@
-# Service Template
+# Notification Service
 
-Стандартный шаблон проекта на SpringBoot
+Сервис уведомлений платформы Corporation X. Сервис работает как Kafka-консьюмер:
+получает события, запрашивает данные пользователя в User Service, формирует
+локализованное сообщение и передает его в канал связи, выбранный пользователем.
 
-# Использованные технологии
+## Реализованный функционал
 
-* [Spring Boot](https://spring.io/projects/spring-boot) – как основной фрэймворк
-* [PostgreSQL](https://www.postgresql.org/) – как основная реляционная база данных
-* [Redis](https://redis.io/) – как кэш и очередь сообщений через pub/sub
-* [testcontainers](https://testcontainers.com/) – для изолированного тестирования с базой данных
-* [Liquibase](https://www.liquibase.org/) – для ведения миграций схемы БД
-* [Gradle](https://gradle.org/) – как система сборки приложения
-* [Lombok](https://projectlombok.org/) – для удобной работы с POJO классами
-* [MapStruct](https://mapstruct.org/) – для удобного маппинга между POJO классами
+- Обработка событий из Kafka-топика `recommendation_received_events`.
+- Десериализация события рекомендации:
+  `id`, `authorId`, `receiverId`, `createdAt`.
+- Получение получателя рекомендации через User Service.
+- Повторные запросы к User Service при временных ошибках: до 3 попыток с
+  экспоненциальной задержкой.
+- Формирование текста уведомления с учетом локали пользователя.
+- Выбор реализации `NotificationService` по предпочтительному каналу пользователя.
+- Логирование ошибок обработки события и случаев, когда для выбранного канала
+  нет доступной реализации.
 
-# База данных
+Сервис не предоставляет REST-эндпоинт для отправки уведомлений: основной поток
+обмена данными проходит через Kafka.
 
-* База поднимается в отдельном сервисе [infra](../infra)
-* Redis поднимается в единственном инстансе тоже в [infra](../infra)
-* Liquibase сам накатывает нужные миграции на голый PostgreSql при старте приложения
-* В тестах используется [testcontainers](https://testcontainers.com/), в котором тоже запускается отдельный инстанс
-  postgres
-* В коде продемонстрирована работа как с JdbcTemplate, так и с JPA (Hibernate)
+## Технологии
 
-# Как начать разработку начиная с шаблона?
+- Java 17
+- Spring Boot 3
+- Spring Kafka
+- Spring Cloud OpenFeign
+- Gradle
+- Redis client
+- SMTP и Vonage SDK для интеграций с каналами уведомлений
 
-1. Сначала нужно склонировать этот репозиторий
+## Требования
 
-```shell
-git clone https://github.com/FAANG-School/ServiceTemplate
-```
+- JDK 17 или Docker
+- Доступный Kafka-брокер
+- Запущенный User Service
+- Redis, если он используется конфигурацией окружения
 
-2. Далее удаляем служебную директорию для git
+По умолчанию приложение ожидает Kafka на `localhost:9094`, Redis на
+`localhost:6379`, User Service на `localhost:8080` и запускается на порту
+`8083`.
 
-```shell
-# Переходим в корневую директорию проекта
-cd ServiceTemplate
-rm -rf .git
-```
+## Запуск локально
 
-3. Далее нужно создать совершенно пустой репозиторий в github/gitlab
-
-4. Создаём новый репозиторий локально и коммитим изменения
-
-```shell
-git init
-git remote add origin <link_to_repo>
-git add .
-git commit -m "<msg>"
-```
-
-Готово, можно начинать работу!
-
-# Как запустить локально?
-
-Сначала нужно развернуть базу данных из директории [infra](../infra)
-
-Далее собрать gradle проект
+Соберите приложение из корневой директории проекта:
 
 ```shell
-# Нужно запустить из корневой директории, где лежит build.gradle.kts
-gradle build
+.\gradlew.bat clean bootJar
 ```
 
-Запустить jar'ник
+Запустите собранный JAR:
 
 ```shell
-java -jar build/libs/ServiceTemplate-1.0.jar
+java -jar build\libs\service.jar
 ```
 
-Но легче всё это делать через IDE
+Для запуска тестов:
 
-# Код
+```shell
+.\gradlew.bat test
+```
 
-RESTful приложения калькулятор с единственным endpoint'ом, который принимает 2 числа и выдает результаты их сложения,
-вычитаяни, умножения и деления
+## Запуск в Docker
 
-* Обычная трёхслойная
-  архитектура – [Controller](src/main/java/faang/school/notificationservice/controller), [Service](src/main/java/faang/school/notificationservice/service), [Repository](src/main/java/faang/school/notificationservice/repository)
-* Слой Repository реализован и на jdbcTemplate, и на JPA (Hibernate)
-* Написан [GlobalExceptionHandler](src/main/java/faang/school/notificationservice/controller/GlobalExceptionHandler.java)
-  который умеет возвращать ошибки в формате `{"code":"CODE", "message": "message"}`
-* Используется TTL кэширование вычислений
-  в [CalculationTtlCacheService](src/main/java/faang/school/notificationservice/service/cache/CalculationTtlCacheService.java)
-* Реализован простой Messaging через [Redis pub/sub](https://redis.io/docs/manual/pubsub/)
-  * [Конфигурация](src/main/java/faang/school/notificationservice/config/RedisConfig.java) –
-    сетапится [RedisTemplate](https://docs.spring.io/spring-data/redis/docs/current/api/org/springframework/data/redis/core/RedisTemplate.html) –
-    класс, для удобной работы с Redis силами Spring
-  * [Отправитель](src/main/java/faang/school/notificationservice/service/messaging/RedisCalculationPublisher.java) – генерит
-    рандомные запросы и отправляет в очередь
-  * [Получатель](src/main/java/faang/school/notificationservice/service/messaging/RedisCalculationSubscriber.java) –
-    получает запросы и отправляет задачи асинхронно выполняться
-    в [воркер](src/main/java/faang/school/notificationservice/service/worker/CalculationWorker.java)
+Сначала соберите JAR, который используется в `Dockerfile`:
 
-# Тесты
+```shell
+.\gradlew.bat clean bootJar
+```
 
-Написаны только для единственного REST endpoint'а
-* SpringBootTest
-* MockMvc
-* Testcontainers
-* AssertJ
-* JUnit5
-* Parameterized tests
+Соберите Docker-образ:
 
-# TODO
+```shell
+docker build -t notification-service .
+```
 
-* Dockerfile, который подключается к сети запущенной postgres в docker-compose
-* Redis connectivity
-* ...
+Запустите контейнер, передав адреса зависимостей. Имена хостов должны быть
+доступны из Docker-сети:
+
+```shell
+docker run --rm --name notification-service `
+  -p 8083:8083 `
+  -e KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9094 `
+  -e REDIS_HOST=host.docker.internal `
+  -e REDIS_PORT=6379 `
+  -e USER_SERVICE_HOST=host.docker.internal `
+  -e USER_SERVICE_PORT=8080 `
+  notification-service
+```
+
+Переменные окружения:
+
+| Переменная | Значение по умолчанию | Назначение |
+| --- | --- | --- |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9094` | Адрес Kafka |
+| `REDIS_HOST` | `localhost` | Хост Redis |
+| `REDIS_PORT` | `6379` | Порт Redis |
+| `USER_SERVICE_HOST` | `localhost` | Хост User Service |
+| `USER_SERVICE_PORT` | `8080` | Порт User Service |
+| `PROJECT_SERVICE_HOST` | `localhost` | Хост Project Service |
+| `PROJECT_SERVICE_PORT` | `8082` | Порт Project Service |
+
+## Kafka
+
+Сервис слушает топик:
+
+```text
+recommendation_received_events
+```
+
+Группа потребителей:
+
+```text
+notification-service-group
+```
+
+Пример события:
+
+```json
+{
+  "id": 16,
+  "authorId": 1,
+  "receiverId": 7,
+  "createdAt": "2025-11-12T12:06:09"
+}
+```
